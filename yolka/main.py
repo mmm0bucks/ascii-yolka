@@ -43,22 +43,38 @@ GLOW = 1.0               # свечение вокруг ярких символ
 
 # ------------------------------------------------------- техническая часть
 
-COLS, ROWS = 88, 74              # сетка символов
 CW, CH, FONT_PX = 9, 14, 14      # размер ячейки и шрифта, px
-W, H = COLS * CW, ROWS * CH
+START_SIZE = (792, 1036)         # окно при запуске на компьютере (в браузере — вся страница)
+MAX_H = 1080                     # на экранах выше кадр считается в этом размере и растягивается
 FPS = 30
 MONO = "consolas,menlo,dejavusansmono,couriernew,monospace"
 BG = (6, 8, 15)
 
 TAU = 2 * np.pi
-SCALE = 272.0                    # px на единицу мира
-CX, CY = W / 2, 54.5 * CH        # где на экране стоит основание ёлки
 PITCH = np.radians(12)           # камера смотрит чуть сверху
 CAM = 7.0                        # расстояние до камеры (перспектива)
 LIGHT = np.array([-0.45, 0.65, 0.62]) / np.linalg.norm([-0.45, 0.65, 0.62])
 
 Y0, Y1, RB = 0.22, 2.0, 0.80     # низ кроны, верхушка, радиус у основания
-SNOW_H, SNOW_R = 3.3, 2.1
+
+# Раскладка под размер окна — считается в set_layout(), руками не задаётся.
+COLS = ROWS = W = H = 0          # сетка символов и размер кадра в px
+SCALE = CX = CY = 0.0            # px на единицу мира; где на экране основание ёлки
+HALF_W = SNOW_H = 0.0            # полуширина экрана и высота снегопада в единицах мира
+
+
+def set_layout(width, height):
+    """Сетка символов под окно: ёлка вписана по высоте, небо и земля — на всю ширину."""
+    global COLS, ROWS, W, H, SCALE, CX, CY, HALF_W, SNOW_H
+    COLS, ROWS = max(40, width // CW), max(36, height // CH)
+    W, H = COLS * CW, ROWS * CH
+    SCALE = min(H / 3.8, W / 2.7)
+    CX, CY = W / 2, H * 0.735
+    HALF_W = W / 2 / SCALE
+    SNOW_H = max(3.3, 1.2 * CY / SCALE)
+
+
+set_layout(*START_SIZE)
 WEB = sys.platform == "emscripten"
 DENSITY = 0.6 if WEB else 1.0     # в браузере (WebAssembly) numpy медленнее — точек меньше
 
@@ -107,13 +123,13 @@ def bounce(e):
 FIELDS = {
     "pos": 3, "nrm": 3, "col": 3, "off": 2, "shaded": 1, "base": 1, "ao": 1, "birth": 1,
     "dur": 1, "mode": 1, "swirl": 1, "tw_f": 1, "tw_p": 1, "tw_a": 1, "fch": 1, "fall": 1,
-    "sway": 1, "zbias": 1, "bulb": 1, "gain": 1,
+    "sway": 1, "zbias": 1, "bulb": 1, "gain": 1, "fixed": 1,
 }
 # значения по умолчанию (pos и col задаются всегда)
 DEFAULTS = {
     "nrm": (0, 1, 0), "off": 0, "shaded": 0, "base": 1, "ao": 1, "birth": -1e9, "dur": 1,
     "mode": STATIC, "swirl": 0, "tw_f": 0, "tw_p": 0, "tw_a": 0.38, "fch": -1, "fall": 0,
-    "sway": 0, "zbias": 0, "bulb": 0, "gain": 1,
+    "sway": 0, "zbias": 0, "bulb": 0, "gain": 1, "fixed": 0,
 }
 
 
@@ -140,14 +156,17 @@ def build(seed=7):
     rng = np.random.default_rng(seed)
     q = Parts()
 
+    # Земля и снег не вращаются вместе с ёлкой (fixed=1) и тянутся на всю ширину экрана.
+    x_max = 1.35 * HALF_W + 0.1                            # с запасом на перспективу
+
     # заснеженная земля
-    n = int(4200 * DENSITY)
-    r, a = 2.4 * np.sqrt(rng.random(n)), TAU * rng.random(n)
-    base = 0.05 + 0.16 * rng.random(n) ** 2 + 0.16 * np.clip(1 - r / 1.2, 0, 1)
+    n = int(230 * (2 * x_max) * 4.8 * DENSITY)
+    x, z = rng.uniform(-x_max, x_max, n), rng.uniform(-2.4, 2.4, n)
+    base = 0.05 + 0.16 * rng.random(n) ** 2 + 0.16 * np.clip(1 - np.hypot(x, z) / 1.2, 0, 1)
     fch = np.select([base > 0.2, base > 0.12, base > 0.07], [IDX[":"], IDX["-"], IDX["·"]],
                     IDX["."])
-    q.add(np.c_[r * np.cos(a), 0.01 * rng.normal(size=n), r * np.sin(a)],
-          np.array([150, 172, 220.0]), base=base, fch=fch)
+    q.add(np.c_[x, 0.01 * rng.normal(size=n), z],
+          np.array([150, 172, 220.0]), base=base, fch=fch, fixed=1)
 
     # ствол
     n = 320
@@ -254,13 +273,13 @@ def build(seed=7):
               gain=np.where(ribbon, RIBBON_BRIGHT, GIFT_BRIGHT))
 
     # снег: падает всегда
-    n = int(560 * SNOW_AMOUNT)
-    r, a = SNOW_R * np.sqrt(rng.random(n)), TAU * rng.random(n)
+    n = int(12 * (2 * x_max) * 4.2 * SNOW_H * SNOW_AMOUNT)
     size = rng.random(n)
     fch = np.select([size > 0.86, size > 0.45, size > 0.2], [IDX["*"], IDX["+"], IDX["·"]],
                     IDX["."])
-    q.add(np.c_[r * np.cos(a), SNOW_H * rng.random(n), r * np.sin(a)], WHITE,
-          base=0.45 + 0.55 * size, fch=fch, gain=SNOW_BRIGHT,
+    q.add(np.c_[rng.uniform(-x_max, x_max, n), SNOW_H * rng.random(n),
+                rng.uniform(-2.1, 2.1, n)], WHITE,
+          base=0.45 + 0.55 * size, fch=fch, gain=SNOW_BRIGHT, fixed=1,
           fall=(0.14 + 0.26 * size + 0.05 * rng.random(n)) * SNOW_SPEED,
           sway=0.03 + 0.07 * rng.random(n), tw_f=rng.uniform(0.6, 1.6, n),
           tw_p=TAU * rng.random(n))
@@ -295,7 +314,7 @@ class Scene:
         spread = 1 + 2.6 * k * swirl
 
         # поворот вокруг вертикали (+ вихрь для летящих), наклон камеры, перспектива
-        a = ang + k * P["swirl"]
+        a = ang * (1 - P["fixed"]) + k * P["swirl"]
         ca, sa = np.cos(a), np.sin(a)
         xr, zr = (x * ca + z * sa) * spread, (-x * sa + z * ca) * spread
         cp, sp = np.cos(PITCH), np.sin(PITCH)
@@ -362,44 +381,55 @@ def load_font(px):
 
 
 class Renderer:
-    """Атлас глифов -> кадр собирается одним numpy-выражением, без циклов по ячейкам."""
+    """Глифы заранее нарисованы белым; кадр = пачка блитов глифов x картинка цветов."""
 
     def __init__(self):
         font = load_font(FONT_PX)
-        atlas = np.zeros((len(CHARSET), CH, CW), np.uint16)
+        self.glyphs = []                                 # картинка ячейки для каждого символа
+        cover = np.zeros(len(CHARSET))                   # какая доля ячейки закрашена
         have = np.zeros(len(CHARSET), bool)
         for i, c in enumerate(CHARSET):
             m = font.metrics(c)
+            s = pygame.Surface((CW, CH))
+            self.glyphs.append(s)
             if c == " " or not m or m[0] is None:
                 continue
             g = font.render(c, True, (255, 255, 255), (0, 0, 0))
-            s = pygame.Surface((CW, CH))
             s.blit(g, ((CW - g.get_width()) // 2, (CH - g.get_height()) // 2))
-            atlas[i] = pygame.surfarray.array3d(s)[:, :, 0].T
-            have[i] = atlas[i].any()
-        self.atlas = atlas
+            cover[i] = pygame.surfarray.array3d(s).mean()
+            have[i] = cover[i] > 0
         # шкала яркости: символы, которые есть в шрифте, по возрастанию заливки
         ids = np.array([IDX[c] for c in RAMP if have[IDX[c]]])
-        self.ramp = ids[np.argsort(atlas[ids].reshape(len(ids), -1).mean(1), kind="stable")]
+        self.ramp = ids[np.argsort(cover[ids], kind="stable")]
+        self.resize()
+
+    def resize(self):
+        """Вызывать после set_layout(): холсты под новый размер кадра."""
         self.frame = pygame.Surface((W, H))
         self.ink = pygame.Surface((W, H))
+        self.tint = pygame.Surface((COLS, ROWS))         # по одному пикселю цвета на ячейку
 
     def draw(self, chars, cols):
         r, c = np.nonzero(chars)                                     # только непустые ячейки
-        tiles = self.atlas[chars[r, c]][..., None] * cols[r, c].astype(np.uint16)[:, None, None, :]
-        img = np.zeros((ROWS, COLS, CH, CW, 3), np.uint8)
-        img[r, c] = tiles >> 8
-        img = img.transpose(1, 3, 0, 2, 4).reshape(W, H, 3)
-        pygame.surfarray.blit_array(self.ink, img)
+        glyphs = [self.glyphs[i] for i in chars[r, c].tolist()]
+        spots = zip((c * CW).tolist(), (r * CH).tolist(), strict=True)
+        self.ink.fill((0, 0, 0))
+        self.ink.blits(list(zip(glyphs, spots, strict=True)), doreturn=False)   # белые символы
+        pygame.surfarray.blit_array(self.tint, cols.astype(np.uint8).transpose(1, 0, 2))
+        self.ink.blit(pygame.transform.scale(self.tint, (W, H)), (0, 0),
+                      special_flags=pygame.BLEND_RGB_MULT)                      # и их цвета
         self.frame.fill(BG)
         self.frame.blit(self.ink, (0, 0), special_flags=pygame.BLEND_RGB_ADD)
-        for div in (3, 9):                                           # дешёвое свечение
-            glow = pygame.transform.smoothscale(self.ink, (W // div, H // div))
-            glow = pygame.transform.smoothscale(glow, (W, H))
-            if GLOW != 1:
-                g = int(255 * min(max(GLOW, 0), 1))
-                glow.fill((g, g, g), special_flags=pygame.BLEND_RGB_MULT)
-            self.frame.blit(glow, (0, 0), special_flags=pygame.BLEND_RGB_ADD)
+        if GLOW > 0:                                                 # дешёвое свечение:
+            near = pygame.transform.smoothscale(self.ink, (W // 3, H // 3))    # уменьшить,
+            far = pygame.transform.smoothscale(near, (W // 9, H // 9))
+            near.blit(pygame.transform.smoothscale(far, near.get_size()), (0, 0),
+                      special_flags=pygame.BLEND_RGB_ADD)
+            if GLOW < 1:
+                g = int(255 * GLOW)
+                near.fill((g, g, g), special_flags=pygame.BLEND_RGB_MULT)
+            glow = pygame.transform.smoothscale(near, (W, H))                  # растянуть
+            self.frame.blit(glow, (0, 0), special_flags=pygame.BLEND_RGB_ADD)  # и сложить
         return self.frame
 
 
@@ -411,34 +441,55 @@ def draw_frame(scene, rend, t, tt, ang, paused=False, fps=FPS):
         pulse = 0.65 + 0.35 * np.sin(t * 3.2)
         for dr, text, color in ((0, "[ SPACE ]  собрать ёлку", accent),
                                 (2, "или кликни мышью", dim)):
-            put_text(chars, cols, 30 + dr, (COLS - len(text)) // 2, text, color,
+            put_text(chars, cols, int(ROWS * 0.4) + dr, (COLS - len(text)) // 2, text, color,
                      pulse if dr == 0 else 1)
     elif tt > T_TEXT:                                                # поздравление по буквам
         text = " ".join(GREETING)
         x0 = (COLS - len(text)) // 2
+        row = min(ROWS - 6, int((CY + 0.44 * SCALE) / CH))           # чуть ниже подарков
         for i, c in enumerate(text[:int((tt - T_TEXT) * 12)]):
             tint = (RED, GOLD, GREEN)[(i // 2 + int(t * 1.5)) % 3]
-            put_text(chars, cols, 63, x0 + i, c, tint, 0.85 + 0.25 * np.sin(t * 5 + i))
+            put_text(chars, cols, row, x0 + i, c, tint, 0.85 + 0.25 * np.sin(t * 5 + i))
 
     symbols = int((chars > 0).sum())
-    put_text(chars, cols, 70, 1, "yolka.ascii" + ("   — пауза —" if paused else ""), dim)
-    put_text(chars, cols, 71, 1, f"rotation {np.degrees(ang) % 360:06.2f}°    lights {lit:3d}"
+    put_text(chars, cols, ROWS - 4, 1, "yolka.ascii" + ("   — пауза —" if paused else ""), dim)
+    put_text(chars, cols, ROWS - 3, 1, f"rotation {np.degrees(ang) % 360:06.2f}°    lights {lit:3d}"
              f"    symbols {symbols:,}".replace(",", " ") + f"    fps {fps:2.0f}", dim)
-    put_text(chars, cols, 72, 1, "SPACE пауза · R заново · S скриншот · мышь вращать · Esc",
+    put_text(chars, cols, ROWS - 2, 1, "SPACE пауза · R заново · S скриншот · мышь вращать · Esc",
              (64, 72, 92))
     return rend.draw(chars, cols)
 
 
 # -------------------------------------------------------------------- окно
+def page_size():
+    """Размер страницы браузера в px (только веб-версия)."""
+    import platform  # в pygbag у platform есть window — окно браузера
+
+    return int(platform.window.innerWidth), int(platform.window.innerHeight)
+
+
+def frame_size(width, height):
+    """Какого размера считать кадр для окна: на больших экранах — меньше, с растяжением."""
+    s = max(1.0, height / MAX_H)
+    return int(width / s), int(height / s)
+
+
 async def main():
     pygame.init()
     web = WEB
-    desk_h = pygame.display.Info().current_h
-    k = 1.0 if web or desk_h <= 0 else min(1.0, (desk_h - 110) / H)   # влезть в экран
-    win = pygame.display.set_mode((int(W * k), int(H * k)), 0 if web else pygame.RESIZABLE)
+    if web:
+        set_layout(*frame_size(*page_size()))
+        win = pygame.display.set_mode((W, H))
+    else:
+        desk_h = pygame.display.Info().current_h
+        k = min(1.0, (desk_h - 110) / START_SIZE[1]) if desk_h > 0 else 1.0   # влезть в экран
+        win = pygame.display.set_mode((int(START_SIZE[0] * k), int(START_SIZE[1] * k)),
+                                      pygame.RESIZABLE)
+        set_layout(*frame_size(*win.get_size()))
     pygame.display.set_caption("ASCII-ёлка")
     clock = pygame.time.Clock()
     scene, rend = Scene(), Renderer()
+    frames = 0
 
     t, tt, drag = 0.0, -1.0, 0.0        # время сцены, время с начала сборки, поворот мышью
     paused, moved, running = False, 0.0, True
@@ -474,6 +525,20 @@ async def main():
             elif ev.type == pygame.MOUSEBUTTONUP and ev.button == 1 and moved < 4:
                 action()
 
+        # окно или страницу растянули — пересобрать сетку и сцену под новый размер
+        win = pygame.display.get_surface()
+        frames += 1
+        if frames % 10 == 0:
+            fw, fh = frame_size(*(page_size() if web else win.get_size()))
+            if (max(40, fw // CW), max(36, fh // CH)) != (COLS, ROWS):
+                set_layout(fw, fh)
+                scene = Scene()
+                rend.resize()
+                if web:
+                    import platform
+                    win = pygame.display.set_mode((W, H))
+                    platform.window.window_resize()      # страница заново растянет холст
+
         if not paused:
             t += dt
             if tt >= 0:
@@ -481,12 +546,12 @@ async def main():
         frame = draw_frame(scene, rend, t, tt, t * ROT_SPEED + drag, paused, clock.get_fps())
 
         ww, wh = win.get_size()
-        if (ww, wh) == (W, H):
-            win.blit(frame, (0, 0))
-        else:                                                        # вписать с сохранением пропорций
-            s = min(ww / W, wh / H)
-            size = (max(1, int(W * s)), max(1, int(H * s)))
-            win.fill(BG)
+        s = min(ww / W, wh / H)
+        win.fill(BG)
+        if s < 1.02:                                                 # кадр почти в размер окна
+            win.blit(frame, ((ww - W) // 2, (wh - H) // 2))
+        else:                                                        # большой экран: растянуть
+            size = (int(W * s), int(H * s))
             win.blit(pygame.transform.smoothscale(frame, size),
                      ((ww - size[0]) // 2, (wh - size[1]) // 2))
         pygame.display.flip()

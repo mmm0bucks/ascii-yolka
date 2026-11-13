@@ -25,9 +25,10 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install pygbag==0.9.3
-      - run: python -m pygbag --build --title "ASCII yolka" yolka
-      - uses: actions/configure-pages@v5
-      - uses: actions/upload-pages-artifact@v4
+      - run: python -m pygbag --build --ume_block 0 --title "ASCII-ёлка" yolka
+      - run: python web/style_page.py yolka/build/web
+      - uses: actions/configure-pages@v6
+      - uses: actions/upload-pages-artifact@v5
         with:
           path: yolka/build/web
 
@@ -39,4 +40,4 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - id: deployment
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@v5

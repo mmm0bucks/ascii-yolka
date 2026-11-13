@@ -1,0 +1,18 @@
+# окружение и кэш Python
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+
+# сборка pygbag (делается в GitHub Actions)
+build/
+
+# скриншоты по клавише S
+yolka_*.png
+
+# редакторы и ОС
+.vscode/
+.idea/
+Thumbs.db
+desktop.ini
+.DS_Store

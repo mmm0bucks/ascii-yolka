@@ -3,6 +3,8 @@
 Запускается в GitHub Actions после сборки:  python web/style_page.py yolka/build/web
 Ничего не найдёт — ничего не сломает: страница просто останется стандартной.
 """
+import base64
+import re
 import shutil
 import sys
 from pathlib import Path
@@ -32,10 +34,15 @@ page = web / "index.html"
 html = page.read_text(encoding="utf-8")
 for old, new in TEXTS.items():
     html = html.replace(old, new)
-html = html.replace("</head>", STYLE + "</head>", 1)
-page.write_text(html, encoding="utf-8")
 
+# иконка вкладки: убрать стандартную и вшить свою прямо в страницу (кэш браузера не помешает)
 icon = Path(__file__).with_name("favicon.png")
 if icon.exists():
     shutil.copyfile(icon, web / "favicon.png")
+    data = base64.b64encode(icon.read_bytes()).decode()
+    html = re.sub(r"<link[^>]*rel=\"(?:shortcut )?icon\"[^>]*>", "", html)
+    STYLE += f'<link rel="icon" type="image/png" href="data:image/png;base64,{data}">\n'
+
+html = html.replace("</head>", STYLE + "</head>", 1)
+page.write_text(html, encoding="utf-8")
 print("page styled:", page)
